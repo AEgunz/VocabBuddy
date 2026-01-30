@@ -22,6 +22,7 @@ import urllib.request
 from urllib.error import URLError, HTTPError
 import threading
 import subprocess
+import time
 from PIL import Image, ImageTk
 
 DEFAULT_WORDS = [
@@ -85,6 +86,8 @@ LOCK_FILE_PATH = os.path.join(APPDATA_DIR, "VocabBuddy.lock")
 CURRENT_VERSION = "0.8"
 # GitHub-hosted update metadata (latest.json).
 UPDATE_ENDPOINT = "https://raw.githubusercontent.com/AEgunz/VocabBuddy/main/latest.json"
+# GitHub Releases API for the latest release (preferred source).
+GITHUB_RELEASES_API = "https://api.github.com/repos/AEgunz/VocabBuddy/releases/latest"
 
 THEME = {
     "bg": "#F6F7FB",
@@ -1134,7 +1137,8 @@ class WordRotatorApp:
         # Run update checks in a background thread to keep UI responsive.
         def worker():
             try:
-                info = self._fetch_update_info()
+                # Always bypass cache to avoid stale latest.json or release data.
+                info = self._fetch_update_info(bypass_cache=True)
             except Exception as exc:
                 if manual:
                     self.root.after(0, lambda: messagebox.showerror("Update check failed", str(exc)))
@@ -1157,13 +1161,7 @@ class WordRotatorApp:
                 return
 
             def prompt():
-                msg = (
-                    f"Current version: {CURRENT_VERSION}\\n"
-                    f"New version: {latest}\\n\\n"
-                    f"Release notes:\\n{release_notes or 'No notes provided.'}\\n\\n"
-                    "Update now?"
-                )
-                if messagebox.askyesno("Update Available", msg):
+                if self._show_update_prompt(latest, release_notes):
                     self._download_and_update(download_url, sha256, latest)
                 else:
                     save_config(DB_PATH, {"last_update_check": date.today().isoformat()})
@@ -1172,11 +1170,159 @@ class WordRotatorApp:
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _fetch_update_info(self) -> dict[str, str]:
-        req = urllib.request.Request(UPDATE_ENDPOINT, headers={"User-Agent": "VocabBuddy"})
+    def _show_update_prompt(self, latest: str, notes: str) -> bool:
+        # Custom dialog so buttons match "Update now" / "Later".
+        result = {"update": False}
+        win = tk.Toplevel(self.manager)
+        win.title("Update Available")
+        win.geometry("520x360")
+        win.minsize(480, 300)
+        win.configure(bg=THEME["bg"])
+        win.transient(self.manager)
+        win.grab_set()
+
+        container = tk.Frame(win, bg=THEME["bg"])
+        container.pack(fill="both", expand=True, padx=16, pady=16)
+
+        tk.Label(
+            container,
+            text="Update Available",
+            font=("Segoe UI", 13, "bold"),
+            bg=THEME["bg"],
+            fg=THEME["text"],
+        ).pack(anchor="w")
+
+        tk.Label(
+            container,
+            text=f"Current version: {CURRENT_VERSION}\\nNew version: {latest}",
+            font=("Segoe UI", 10),
+            bg=THEME["bg"],
+            fg=THEME["text"],
+            justify="left",
+        ).pack(anchor="w", pady=(8, 8))
+
+        text_frame = tk.Frame(container, bg=THEME["card"], highlightthickness=1, highlightbackground=THEME["border"])
+        text_frame.pack(fill="both", expand=True)
+
+        scrollbar = tk.Scrollbar(text_frame)
+        scrollbar.pack(side="right", fill="y")
+
+        text = tk.Text(
+            text_frame,
+            wrap="word",
+            yscrollcommand=scrollbar.set,
+            bg=THEME["card"],
+            fg=THEME["text"],
+            relief="flat",
+            highlightthickness=0,
+            padx=10,
+            pady=8,
+            font=("Segoe UI", 10),
+        )
+        text.pack(fill="both", expand=True)
+        scrollbar.config(command=text.yview)
+        text.insert("1.0", notes or "No release notes provided.")
+        text.configure(state="disabled")
+
+        btn_row = tk.Frame(container, bg=THEME["bg"])
+        btn_row.pack(fill="x", pady=(10, 0))
+
+        def do_update():
+            result["update"] = True
+            win.destroy()
+
+        def do_later():
+            result["update"] = False
+            win.destroy()
+
+        update_btn = self.make_button(btn_row, text="Update now", command=do_update, kind="primary")
+        update_btn.pack(side="right", padx=(8, 0))
+        later_btn = self.make_button(btn_row, text="Later", command=do_later, kind="secondary")
+        later_btn.pack(side="right")
+
+        win.wait_window()
+        return result["update"]
+
+    def _fetch_update_info(self, bypass_cache: bool = False) -> dict[str, str]:
+        # Try GitHub Releases API first for freshest data; fall back to latest.json.
+        info = self._fetch_update_info_from_releases(bypass_cache=bypass_cache)
+        if info:
+            return info
+        return self._fetch_update_info_from_latest_json(bypass_cache=bypass_cache)
+
+    def _fetch_update_info_from_releases(self, bypass_cache: bool = False) -> dict[str, str] | None:
+        url = self._cache_bust_url(GITHUB_RELEASES_API) if bypass_cache else GITHUB_RELEASES_API
+        req = urllib.request.Request(url, headers=self._update_headers(bypass_cache))
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                raw = resp.read().decode("utf-8")
+            data = json.loads(raw)
+        except Exception:
+            return None
+
+        tag = (data.get("tag_name") or "").lstrip("v").strip()
+        notes = (data.get("body") or "").strip()
+        assets = data.get("assets") or []
+        latest_json_url = ""
+        installer_url = ""
+        sha256_url = ""
+        for asset in assets:
+            name = asset.get("name") or ""
+            url = asset.get("browser_download_url") or ""
+            if name.lower() == "latest.json":
+                latest_json_url = url
+            if name.lower().endswith(".exe") and "setup" in name.lower():
+                installer_url = url
+            if name.lower().endswith(".sha256") and "setup" in name.lower():
+                sha256_url = url
+
+        if latest_json_url:
+            info = self._fetch_update_info_from_url(latest_json_url, bypass_cache=bypass_cache)
+            if info:
+                return info
+
+        sha256_value = ""
+        if sha256_url:
+            try:
+                sha_raw = self._fetch_text_url(sha256_url, bypass_cache=bypass_cache)
+                sha256_value = sha_raw.strip().split()[0]
+            except Exception:
+                sha256_value = ""
+
+        if tag and installer_url:
+            return {
+                "latest_version": tag,
+                "download_url": installer_url,
+                "release_notes": notes,
+                "sha256": sha256_value,
+            }
+        return None
+
+    def _fetch_update_info_from_latest_json(self, bypass_cache: bool = False) -> dict[str, str]:
+        url = self._cache_bust_url(UPDATE_ENDPOINT) if bypass_cache else UPDATE_ENDPOINT
+        return self._fetch_update_info_from_url(url, bypass_cache=bypass_cache)
+
+    def _fetch_update_info_from_url(self, url: str, bypass_cache: bool = False) -> dict[str, str]:
+        req = urllib.request.Request(url, headers=self._update_headers(bypass_cache))
         with urllib.request.urlopen(req, timeout=15) as resp:
             raw = resp.read().decode("utf-8")
         return json.loads(raw)
+
+    def _fetch_text_url(self, url: str, bypass_cache: bool = False) -> str:
+        req = urllib.request.Request(url, headers=self._update_headers(bypass_cache))
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return resp.read().decode("utf-8")
+
+    def _update_headers(self, bypass_cache: bool) -> dict[str, str]:
+        headers = {"User-Agent": "VocabBuddy"}
+        if bypass_cache:
+            headers["Cache-Control"] = "no-cache"
+            headers["Pragma"] = "no-cache"
+        return headers
+
+    def _cache_bust_url(self, url: str) -> str:
+        sep = "&" if "?" in url else "?"
+        return f"{url}{sep}t={int(time.time())}"
 
     def _is_newer_version(self, latest: str, current: str) -> bool:
         def parse(v: str) -> list[int]:
