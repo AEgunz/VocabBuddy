@@ -1,7 +1,7 @@
 ; Inno Setup script for English Word Rotator
 
 #define MyAppName "VocabBuddy"
-#define MyAppVersion "0.5"
+#define MyAppVersion "0.8"
 #define MyAppPublisher "Your Name"
 #define MyAppExeName "english_app.exe"
 #define MyAppDir "C:\\Users\\Administrator\\Documents\\Englishapp"

@@ -81,8 +81,10 @@ APP_ICON_PATH = resource_path("application.png")
 BODY_LOGO_PATH = resource_path("logo hd.png")
 ICON_DIR = resource_path("icon")
 LOCK_FILE_PATH = os.path.join(APPDATA_DIR, "VocabBuddy.lock")
-CURRENT_VERSION = "0.5"
-UPDATE_ENDPOINT = "https://example.com/latest.json"
+# App version for update checks.
+CURRENT_VERSION = "0.8"
+# GitHub-hosted update metadata (latest.json).
+UPDATE_ENDPOINT = "https://raw.githubusercontent.com/AEgunz/VocabBuddy/main/latest.json"
 
 THEME = {
     "bg": "#F6F7FB",
@@ -1120,6 +1122,7 @@ class WordRotatorApp:
         return widgets
 
     def _maybe_check_for_updates(self) -> None:
+        # Skip automatic checks if we've already checked today.
         cfg = load_config(DB_PATH)
         last = cfg.get("last_update_check", "")
         today = date.today().isoformat()
@@ -1128,6 +1131,7 @@ class WordRotatorApp:
         self.check_for_updates(manual=False)
 
     def check_for_updates(self, manual: bool = False) -> None:
+        # Run update checks in a background thread to keep UI responsive.
         def worker():
             try:
                 info = self._fetch_update_info()
@@ -1191,6 +1195,7 @@ class WordRotatorApp:
         return a > b
 
     def _download_and_update(self, url: str, expected_sha256: str, latest: str) -> None:
+        # Download and verify the installer, then launch it on success.
         def worker():
             try:
                 fd, temp_path = tempfile.mkstemp(prefix="VocabBuddy_", suffix=".exe")
@@ -1417,7 +1422,7 @@ class WordRotatorApp:
             ("heading", "Contact"),
             ("meta", "Contact: +212 6 48 34 40 89"),
             ("heading", "Version"),
-            ("meta", "Version: 0.4"),
+            ("meta", f"Version: {CURRENT_VERSION}"),
             ("heading", "Platform"),
             ("meta", "Platform: Python Desktop Application"),
         ]
