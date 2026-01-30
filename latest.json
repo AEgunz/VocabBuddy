@@ -1,6 +1,6 @@
 {
-  "latest_version": "0.8",
-  "download_url": "https://github.com/AEgunz/VocabBuddy/releases/download/v0.8/VocabBuddySetup.exe",
-  "release_notes": "UI improvements, stability fixes, better editor behavior.",
+  "latest_version": "0.9",
+  "download_url": "https://github.com/AEgunz/VocabBuddy/releases/download/v0.9/VocabBuddySetup.exe",
+  "release_notes": "UI improvements, new add-words shortcut, improved timers, and stability fixes.",
   "sha256": ""
 }
